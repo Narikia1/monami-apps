@@ -1,0 +1,34 @@
+name: Uptime
+
+# Every 2 hours, from the public repository, where Actions minutes are free.
+# A failing run makes GitHub email the repository owner.
+#
+# Source of truth: infra/apps-release in Narikia1/monami, copied here by
+# `scripts/provision-cloud.sh apps`.
+on:
+  schedule:
+    - cron: "23 */2 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: monami.narikia.com is healthy
+    runs-on: ubuntu-24.04
+    timeout-minutes: 3
+    steps:
+      - name: Health endpoint (app + database)
+        run: |
+          for attempt in 1 2 3; do
+            body=$(curl -fsS -m 15 https://monami.narikia.com/api/health) && echo "$body" | jq -e '.ok == true' && exit 0
+            sleep 20
+          done
+          echo "::error::health check failed three times: ${body:-no response}"; exit 1
+      - name: Sign-in page renders
+        run: curl -fsS -m 15 -o /dev/null https://monami.narikia.com/login
+      - name: TLS certificate valid for at least 14 more days
+        run: |
+          echo | openssl s_client -connect monami.narikia.com:443 -servername monami.narikia.com 2>/dev/null \
+            | openssl x509 -noout -checkend 1209600
