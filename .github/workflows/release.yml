@@ -1,0 +1,95 @@
+# Monami for Mac and Windows (ADR-0046), released from the public repository
+# Narikia1/monami-desktop: public repositories build on macOS and Windows at no
+# cost. Builds apps/desktop of a given commit of Narikia1/monami (read with a
+# read-only deploy key), tests the app on each system against
+# monami.narikia.com, and publishes the installers with latest.json, which the
+# download page and the apps read. Started by hand with the commit to build.
+#
+# Source of truth: infra/desktop-release in Narikia1/monami, copied here by
+# `scripts/provision-cloud.sh desktop`.
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Commit of Narikia1/monami to build
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - name: Mac
+            os: macos-15
+            task: dist:mac
+            file: Monami-mac.dmg
+          - name: Windows
+            os: windows-2025
+            task: dist:win
+            file: Monami-Setup.exe
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: Narikia1/monami
+          ref: ${{ inputs.ref }}
+          ssh-key: ${{ secrets.MONAMI_SOURCE_KEY }}
+          persist-credentials: false
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile --filter "@monami/desktop..."
+      - id: version
+        shell: bash
+        run: echo "version=$(node -p "require('./apps/desktop/package.json').version")" >> "$GITHUB_OUTPUT"
+      - name: Unit tests
+        run: pnpm --filter @monami/desktop test
+      - name: The app on this system, against monami.narikia.com
+        run: pnpm --filter @monami/desktop test:e2e
+      - name: Installer
+        run: pnpm --filter @monami/desktop run ${{ matrix.task }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.name }}
+          path: apps/desktop/release/${{ matrix.file }}
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: out
+          merge-multiple: true
+      - name: Release with latest.json and checksums
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.build.outputs.version }}
+          SOURCE: ${{ inputs.ref }}
+        working-directory: out
+        run: |
+          jq -n --arg v "$VERSION" --argjson mac "$(stat -c %s Monami-mac.dmg)" --argjson win "$(stat -c %s Monami-Setup.exe)" \
+            '{version: $v, mac: {file: "Monami-mac.dmg", size: $mac}, windows: {file: "Monami-Setup.exe", size: $win}}' > latest.json
+          sha256sum Monami-mac.dmg Monami-Setup.exe > SHA256SUMS.txt
+          gh release create "v$VERSION" Monami-mac.dmg Monami-Setup.exe latest.json SHA256SUMS.txt \
+            --repo "$GITHUB_REPOSITORY" --title "Monami $VERSION" \
+            --notes "Monami $VERSION for Mac (macOS 12 or later, Apple silicon and Intel) and Windows (10 or 11, 64-bit), built from Narikia1/monami ${SOURCE:0:12}. Download at https://monami.narikia.com/download."
