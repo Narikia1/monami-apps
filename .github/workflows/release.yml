@@ -1,12 +1,12 @@
 # Monami for Mac and Windows (ADR-0046), released from the public repository
-# Narikia1/monami-desktop: public repositories build on macOS and Windows at no
+# Narikia1/monami-apps: public repositories build on macOS and Windows at no
 # cost. Builds apps/desktop of a given commit of Narikia1/monami (read with a
 # read-only deploy key), tests the app on each system against
 # monami.narikia.com, and publishes the installers with latest.json, which the
 # download page and the apps read. Started by hand with the commit to build.
 #
-# Source of truth: infra/desktop-release in Narikia1/monami, copied here by
-# `scripts/provision-cloud.sh desktop`.
+# Source of truth: infra/apps-release in Narikia1/monami, copied here by
+# `scripts/provision-cloud.sh apps`.
 name: Release
 
 on:
