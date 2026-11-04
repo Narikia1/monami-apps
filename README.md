@@ -7,3 +7,5 @@ Each release is built by this repository's Release workflow from Monami's privat
 The app is a window onto monami.narikia.com and opens nothing else. It is not yet signed with Apple's or Microsoft's certificates, so both systems warn on the first start; the download page says what to choose.
 
 The iPhone, iPad and Android apps are built and tested here too, by the Mobile workflow. They reach people through the App Store and Google Play once those accounts exist; nothing is published until then. The source of all the apps stays private; this repository holds only its workflows and the releases.
+
+The Uptime workflow checks monami.narikia.com every two hours.
