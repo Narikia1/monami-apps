@@ -1,0 +1,82 @@
+# Monami for iOS and Android (ADR-0047), checked from the public repository: public
+# repositories build on macOS and Linux at no cost. Builds apps/ios and apps/android of
+# Narikia1/monami (read with a read-only deploy key) and runs their tests against
+# the fixtures TypeScript wrote, nightly and by hand. Nothing is published: the stores
+# come with the developer accounts; the builds stay here as artifacts for testing.
+#
+# Source of truth: infra/apps-release in Narikia1/monami, copied here by
+# `scripts/provision-cloud.sh apps`.
+name: Mobile
+
+on:
+  schedule:
+    - cron: "40 3 * * *"
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Commit of Narikia1/monami to build
+        required: true
+        default: main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mobile
+  cancel-in-progress: true
+
+jobs:
+  ios:
+    name: iOS
+    runs-on: macos-15
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: Narikia1/monami
+          ref: ${{ inputs.ref || 'main' }}
+          ssh-key: ${{ secrets.MONAMI_SOURCE_KEY }}
+          persist-credentials: false
+      - run: brew install xcodegen
+      - run: xcodegen generate
+        working-directory: apps/ios
+      - name: Tests on iPhone, build for iPad
+        working-directory: apps/ios
+        shell: bash
+        run: |
+          phone=$(xcrun simctl list devices available -j | jq -r '[.devices | to_entries[] | select(.key | contains("iOS")) | .value[] | select(.name | startswith("iPhone"))][0].udid')
+          pad=$(xcrun simctl list devices available -j | jq -r '[.devices | to_entries[] | select(.key | contains("iOS")) | .value[] | select(.name | startswith("iPad"))][0].udid')
+          xcodebuild test -project Monami.xcodeproj -scheme Monami -destination "id=$phone" -derivedDataPath build CODE_SIGNING_ALLOWED=NO | tail -25
+          xcodebuild build -project Monami.xcodeproj -scheme Monami -destination "id=$pad" -derivedDataPath build CODE_SIGNING_ALLOWED=NO | tail -3
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Monami-iOS-simulator
+          path: apps/ios/build/Build/Products/Debug-iphonesimulator/Monami.app
+          if-no-files-found: error
+          retention-days: 14
+
+  android:
+    name: Android
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: Narikia1/monami
+          ref: ${{ inputs.ref || 'main' }}
+          ssh-key: ${{ secrets.MONAMI_SOURCE_KEY }}
+          persist-credentials: false
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Tests and builds
+        working-directory: apps/android
+        run: ./gradlew --no-daemon :app:testDebugUnitTest :app:assembleDebug :app:assembleRelease
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Monami-Android-debug
+          path: apps/android/app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+          retention-days: 14
