@@ -1,0 +1,80 @@
+# Monami for iPhone and iPad to TestFlight (ADR-0053). Started by hand with the
+# commit to build. Signing is Apple's own: the App Store Connect key lets Xcode
+# make what it needs in the owner's account, so no certificate is kept here.
+#
+# Source of truth: infra/apps-release in Narikia1/monami, copied here by
+# `scripts/provision-cloud.sh apps`.
+name: TestFlight
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Commit of Narikia1/monami to build
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: testflight
+  cancel-in-progress: false
+
+jobs:
+  upload:
+    name: Build and upload
+    runs-on: macos-26
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: Narikia1/monami
+          ref: ${{ inputs.ref }}
+          ssh-key: ${{ secrets.MONAMI_SOURCE_KEY }}
+          persist-credentials: false
+      - run: brew install xcodegen
+      - run: xcodegen generate
+        working-directory: apps/ios
+      - name: Apple's key
+        shell: bash
+        env:
+          KEY: ${{ secrets.APPLE_API_KEY_P8 }}
+        run: |
+          printf '%s' "$KEY" | base64 --decode > "$RUNNER_TEMP/AuthKey.p8"
+          chmod 600 "$RUNNER_TEMP/AuthKey.p8"
+      - name: Archive
+        working-directory: apps/ios
+        shell: bash
+        env:
+          KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+        run: |
+          xcodebuild archive -project Monami.xcodeproj -scheme Monami -configuration Release \
+            -destination 'generic/platform=iOS' -archivePath "$RUNNER_TEMP/Monami.xcarchive" \
+            CURRENT_PROJECT_VERSION="$GITHUB_RUN_NUMBER" \
+            -allowProvisioningUpdates -authenticationKeyPath "$RUNNER_TEMP/AuthKey.p8" \
+            -authenticationKeyID "$KEY_ID" -authenticationKeyIssuerID "$ISSUER" 2>&1 | grep -E "error:|\*\* ARCHIVE"
+          test -d "$RUNNER_TEMP/Monami.xcarchive"
+      - name: Upload
+        working-directory: apps/ios
+        shell: bash
+        env:
+          KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+        run: |
+          cat > "$RUNNER_TEMP/export.plist" <<'PLIST'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0"><dict>
+            <key>method</key><string>app-store-connect</string>
+            <key>destination</key><string>upload</string>
+            <key>signingStyle</key><string>automatic</string>
+          </dict></plist>
+          PLIST
+          xcodebuild -exportArchive -archivePath "$RUNNER_TEMP/Monami.xcarchive" -exportOptionsPlist "$RUNNER_TEMP/export.plist" \
+            -exportPath "$RUNNER_TEMP/export" -allowProvisioningUpdates -authenticationKeyPath "$RUNNER_TEMP/AuthKey.p8" \
+            -authenticationKeyID "$KEY_ID" -authenticationKeyIssuerID "$ISSUER" 2>&1 | grep -E "error:|Upload|EXPORT|\*\*"
+      - name: Remove Apple's key
+        if: always()
+        shell: bash
+        run: rm -f "$RUNNER_TEMP/AuthKey.p8"
