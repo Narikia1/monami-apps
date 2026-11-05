@@ -39,8 +39,8 @@ jobs:
             task: dist:win
             file: Monami-Setup.exe
     runs-on: ${{ matrix.os }}
-    # Apple's notarization can take a while, above all for a new account.
-    timeout-minutes: 120
+    # Apple's notarization can take hours, above all for a new account. 350 is close to GitHub's limit.
+    timeout-minutes: 350
     outputs:
       version: ${{ steps.version.outputs.version }}
     steps:
