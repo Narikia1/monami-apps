@@ -1,0 +1,72 @@
+# Monami for Android to a Google Play test track. Started by hand with the commit
+# to build. The upload key signs it, and the robot account uploads it. Production
+# is not offered here: that release is the owner's decision, made in Play Console.
+#
+# Source of truth: infra/apps-release in Narikia1/monami, copied here by
+# `scripts/provision-cloud.sh apps`.
+name: Google Play
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Commit of Narikia1/monami to build
+        required: true
+      track:
+        description: Test track (alpha is Play Console's closed test)
+        type: choice
+        default: internal
+        options:
+          - internal
+          - alpha
+
+permissions:
+  contents: read
+
+concurrency:
+  group: play
+  cancel-in-progress: false
+
+jobs:
+  upload:
+    name: Build and upload
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: Narikia1/monami
+          ref: ${{ inputs.ref }}
+          ssh-key: ${{ secrets.MONAMI_SOURCE_KEY }}
+          persist-credentials: false
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+      - uses: gradle/actions/setup-gradle@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: The upload key and the robot's key
+        shell: bash
+        env:
+          KEYSTORE: ${{ secrets.PLAY_UPLOAD_KEYSTORE }}
+          SERVICE_ACCOUNT: ${{ secrets.PLAY_SERVICE_ACCOUNT }}
+        run: |
+          printf '%s' "$KEYSTORE" | base64 --decode > "$RUNNER_TEMP/upload.jks"
+          printf '%s' "$SERVICE_ACCOUNT" | base64 --decode > "$RUNNER_TEMP/service-account.json"
+          chmod 600 "$RUNNER_TEMP/upload.jks" "$RUNNER_TEMP/service-account.json"
+      - name: Test and build
+        working-directory: apps/android
+        env:
+          MONAMI_UPLOAD_KEYSTORE_PASSWORD: ${{ secrets.PLAY_UPLOAD_KEYSTORE_PASSWORD }}
+        run: |
+          export MONAMI_UPLOAD_KEYSTORE="$RUNNER_TEMP/upload.jks"
+          ./gradlew --no-daemon :app:testDebugUnitTest :app:bundleRelease -PmonamiVersionCode="$GITHUB_RUN_NUMBER"
+      - name: Upload
+        run: |
+          PLAY_SERVICE_ACCOUNT="$RUNNER_TEMP/service-account.json" node scripts/play-upload.mjs \
+            apps/android/app/build/outputs/bundle/release/app-release.aab "$GITHUB_RUN_NUMBER" "${{ inputs.track }}"
+      - name: Remove the keys
+        if: always()
+        run: rm -f "$RUNNER_TEMP/upload.jks" "$RUNNER_TEMP/service-account.json"
