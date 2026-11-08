@@ -1,4 +1,4 @@
-# Monami for Mac and Windows (ADR-0046), released from the public repository
+# Monami for Mac, Windows and Android (ADR-0046, ADR-0047), released from the public repository
 # Narikia1/monami-apps: public repositories build on macOS and Windows at no
 # cost. Builds apps/desktop of a given commit of Narikia1/monami (read with a
 # read-only deploy key), tests the app on each system against
@@ -100,8 +100,53 @@ jobs:
           path: apps/desktop/release/${{ matrix.file }}
           if-no-files-found: error
 
+  # The same release carries Android's copy for monami.narikia.com/download/android: signed with the upload key,
+  # so it installs without Google Play (whose automatic protection would send people to the store).
+  android:
+    name: Android
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: Narikia1/monami
+          ref: ${{ inputs.ref }}
+          ssh-key: ${{ secrets.MONAMI_SOURCE_KEY }}
+          persist-credentials: false
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+      - uses: gradle/actions/setup-gradle@v4
+      - name: The upload key
+        shell: bash
+        env:
+          KEYSTORE: ${{ secrets.PLAY_UPLOAD_KEYSTORE }}
+        run: |
+          printf '%s' "$KEYSTORE" | base64 --decode > "$RUNNER_TEMP/upload.jks"
+          chmod 600 "$RUNNER_TEMP/upload.jks"
+      - name: Test and build
+        working-directory: apps/android
+        env:
+          MONAMI_UPLOAD_KEYSTORE_PASSWORD: ${{ secrets.PLAY_UPLOAD_KEYSTORE_PASSWORD }}
+        run: |
+          export MONAMI_UPLOAD_KEYSTORE="$RUNNER_TEMP/upload.jks"
+          version=$(node -p "require('../desktop/package.json').version")
+          # 1.2.3 becomes 10203: each release installs over the one before.
+          code=$(node -p "'$version'.split('.').reduce((n, part) => n * 100 + Number(part), 0)")
+          ./gradlew --no-daemon :app:testDebugUnitTest :app:assembleRelease -PmonamiVersionCode="$code" -PmonamiVersionName="$version"
+          cp app/build/outputs/apk/release/app-release.apk "$RUNNER_TEMP/Monami-Android.apk"
+      - name: Remove the key
+        if: always()
+        run: rm -f "$RUNNER_TEMP/upload.jks"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Android
+          path: ${{ runner.temp }}/Monami-Android.apk
+          if-no-files-found: error
+
   publish:
-    needs: build
+    needs: [build, android]
     runs-on: ubuntu-24.04
     permissions:
       contents: write
@@ -117,9 +162,9 @@ jobs:
           SOURCE: ${{ inputs.ref }}
         working-directory: out
         run: |
-          jq -n --arg v "$VERSION" --argjson mac "$(stat -c %s Monami-mac.dmg)" --argjson win "$(stat -c %s Monami-Setup.exe)" \
-            '{version: $v, mac: {file: "Monami-mac.dmg", size: $mac}, windows: {file: "Monami-Setup.exe", size: $win}}' > latest.json
-          sha256sum Monami-mac.dmg Monami-Setup.exe > SHA256SUMS.txt
-          gh release create "v$VERSION" Monami-mac.dmg Monami-Setup.exe latest.json SHA256SUMS.txt \
+          jq -n --arg v "$VERSION" --argjson mac "$(stat -c %s Monami-mac.dmg)" --argjson win "$(stat -c %s Monami-Setup.exe)" --argjson android "$(stat -c %s Monami-Android.apk)" \
+            '{version: $v, mac: {file: "Monami-mac.dmg", size: $mac}, windows: {file: "Monami-Setup.exe", size: $win}, android: {file: "Monami-Android.apk", size: $android}}' > latest.json
+          sha256sum Monami-mac.dmg Monami-Setup.exe Monami-Android.apk > SHA256SUMS.txt
+          gh release create "v$VERSION" Monami-mac.dmg Monami-Setup.exe Monami-Android.apk latest.json SHA256SUMS.txt \
             --repo "$GITHUB_REPOSITORY" --title "Monami $VERSION" \
-            --notes "Monami $VERSION for Mac (macOS 12 or later, Apple silicon and Intel) and Windows (10 or 11, 64-bit), built from Narikia1/monami ${SOURCE:0:12}. Download at https://monami.narikia.com/download."
+            --notes "Monami $VERSION for Mac (macOS 12 or later, Apple silicon and Intel), Windows (10 or 11, 64-bit) and Android (8 or later), built from Narikia1/monami ${SOURCE:0:12}. Download at https://monami.narikia.com/download."
