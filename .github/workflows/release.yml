@@ -92,7 +92,8 @@ jobs:
           app=apps/desktop/release/mac-universal/Monami.app
           codesign --verify --deep --strict --verbose=2 "$app"
           codesign --display --entitlements - "$app" | grep -q com.apple.security.device.camera
-          xcrun stapler validate "$app"
+          # Apple's ticket service sometimes drops the runner's connection (error 68, 8 November 2026): ask again.
+          for attempt in 1 2 3 4; do xcrun stapler validate "$app" && break; [ "$attempt" = 4 ] && exit 68; sleep 30; done
           spctl --assess --type execute --verbose=4 "$app"
       - uses: actions/upload-artifact@v4
         with:
